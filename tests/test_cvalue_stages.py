@@ -129,6 +129,19 @@ def _score_ate(**overrides: Any) -> AteSpec:
     return AteSpec(**values)
 
 
+_STALE_STAGE = b'stale-stage'
+
+
+def _poison_stage(path: Path) -> None:
+    path.write_bytes(_STALE_STAGE)
+
+
+def _assert_parquet_replaced(path: Path) -> None:
+    assert path.is_file()
+    assert path.read_bytes() != _STALE_STAGE
+    _ = pl.scan_parquet(path).collect()
+
+
 def _assert_bucket_sql(sql: str, *, buckets: int, bucket: int) -> None:
     upper = sql.upper()
     assert 'HASH(' in upper
@@ -549,7 +562,7 @@ def test_config_mismatch_invalidates_score_stages_only(tmp_path: Path) -> None:
         artifact_dir=dest,
     )
     stats_path = dest / SCORE_STAGE_DIRNAME / 'term_stats.parquet'
-    first_ino = stats_path.stat().st_ino
+    _poison_stage(stats_path)
     score_term_parquet(
         extract,
         ate=_score_ate(duckdb_memory='128MB'),
@@ -557,8 +570,7 @@ def test_config_mismatch_invalidates_score_stages_only(tmp_path: Path) -> None:
         artifact_dir=dest,
     )
     assert part.read_bytes() == extract_bytes
-    assert stats_path.is_file()
-    assert stats_path.stat().st_ino != first_ino
+    _assert_parquet_replaced(stats_path)
     manifest = ScoreStageManifest.model_validate_json(
         (dest / SCORE_STAGE_DIRNAME / SCORE_MANIFEST_NAME).read_text(encoding='utf-8')
     )
@@ -592,7 +604,7 @@ def test_extract_fingerprint_mismatch_invalidates_score_stages_only(tmp_path: Pa
     marker = dest / SCORE_STAGE_DIRNAME / 'stale.marker'
     _ = marker.write_text('drop', encoding='utf-8')
     stats_path = dest / SCORE_STAGE_DIRNAME / 'term_stats.parquet'
-    first_ino = stats_path.stat().st_ino
+    _poison_stage(stats_path)
     score_term_parquet(
         extract,
         ate=_score_ate(),
@@ -601,7 +613,7 @@ def test_extract_fingerprint_mismatch_invalidates_score_stages_only(tmp_path: Pa
     )
     assert part.read_bytes() == extract_bytes
     assert not marker.exists()
-    assert stats_path.stat().st_ino != first_ino
+    _assert_parquet_replaced(stats_path)
     restored = ScoreStageManifest.model_validate_json(manifest_path.read_text(encoding='utf-8'))
     assert restored.extract.digest != '0' * 64
     assert restored.extract == ExtractFingerprint.from_files((part,))
@@ -762,14 +774,13 @@ def test_missing_unit_recomputes_only_that_unit(tmp_path: Path) -> None:
         encoding='utf-8',
     )
     score_term_parquet(extract, ate=ate, temp_dir=dest / 'spill', artifact_dir=dest)
-    for unit_id, before in kept.items():
-        path = unit_dir / f'{unit_id}.parquet'
-        after = path.stat()
-        if unit_id == missing:
-            assert after.st_ino != before.st_ino
-            continue
-        assert after.st_ino == before.st_ino
-        assert after.st_mtime_ns == before.st_mtime_ns
+    assert (unit_dir / f'{missing}.parquet').is_file()
+    assert all(
+        (unit_dir / f'{unit_id}.parquet').stat().st_ino == before.st_ino
+        and (unit_dir / f'{unit_id}.parquet').stat().st_mtime_ns == before.st_mtime_ns
+        for unit_id, before in kept.items()
+        if unit_id != missing
+    )
     store = TermhoodStore.open(dest)
     assert store.meta.total_docs == 2
     assert store.meta.n_keys >= 1
@@ -1629,13 +1640,16 @@ def test_resume_rejects_semantic4_and_5_units(tmp_path: Path, stale_semantic: st
     )
     stale_ids = first.work.unit_ids() or ('hash-0000',)
     unit_dir.mkdir(parents=True, exist_ok=True)
-    for unit_id in stale_ids:
+
+    def persist_stale(unit_id: str) -> None:
         dummy.write_parquet(unit_dir / f'{unit_id}.parquet')
-    stale_inodes = {
-        unit_id: (unit_dir / f'{unit_id}.parquet').stat().st_ino for unit_id in stale_ids
-    }
-    lengths_before = (stages / f'{CANDIDATE_SPAN_LENGTHS_NAME}.parquet').stat().st_ino
-    costs_before = (stages / f'{PARENT_SPAN_COSTS_NAME}.parquet').stat().st_ino
+
+    tuple(map(persist_stale, stale_ids))
+    stale_bytes = {unit_id: (unit_dir / f'{unit_id}.parquet').read_bytes() for unit_id in stale_ids}
+    lengths_path = stages / f'{CANDIDATE_SPAN_LENGTHS_NAME}.parquet'
+    costs_path = stages / f'{PARENT_SPAN_COSTS_NAME}.parquet'
+    _poison_stage(lengths_path)
+    _poison_stage(costs_path)
     manifest = ScoreStageManifest.model_validate_json(
         (stages / SCORE_MANIFEST_NAME).read_text(encoding='utf-8')
     )
@@ -1663,11 +1677,13 @@ def test_resume_rejects_semantic4_and_5_units(tmp_path: Path, stale_semantic: st
     assert restored.completed_units == ()
     assert stats_path.stat().st_ino == stats_before.st_ino
     assert surfaces_path.stat().st_ino == surfaces_before.st_ino
-    assert (stages / f'{CANDIDATE_SPAN_LENGTHS_NAME}.parquet').stat().st_ino != lengths_before
-    assert (stages / f'{PARENT_SPAN_COSTS_NAME}.parquet').stat().st_ino != costs_before
-    for unit_id, inode in stale_inodes.items():
-        path = unit_dir / f'{unit_id}.parquet'
-        assert not path.is_file() or path.stat().st_ino != inode
+    _assert_parquet_replaced(lengths_path)
+    _assert_parquet_replaced(costs_path)
+    assert all(
+        not (unit_dir / f'{unit_id}.parquet').is_file()
+        or (unit_dir / f'{unit_id}.parquet').read_bytes() != payload
+        for unit_id, payload in stale_bytes.items()
+    )
 
 
 def test_strategy_cap_change_invalidates_unit_resume(tmp_path: Path) -> None:
@@ -1682,8 +1698,15 @@ def test_strategy_cap_change_invalidates_unit_resume(tmp_path: Path) -> None:
         {'child': ['coil spring'], 'p_ta': [1], 'sum_parent_tf': [1.0]},
         schema={'child': pl.String, 'p_ta': pl.Int64, 'sum_parent_tf': pl.Float64},
     )
-    for unit in first.work.units:
+
+    def persist_unit(unit: HashSlotUnit | SpanBandUnit) -> None:
         dummy.write_parquet(unit_dir / f'{unit.unit_id}.parquet')
+
+    tuple(map(persist_unit, first.work.units))
+    stale_bytes = {
+        unit.unit_id: (unit_dir / f'{unit.unit_id}.parquet').read_bytes()
+        for unit in first.work.units
+    }
     manifest = ScoreStageManifest.model_validate_json(
         (stages / SCORE_MANIFEST_NAME).read_text(encoding='utf-8')
     )
@@ -1692,9 +1715,6 @@ def test_strategy_cap_change_invalidates_unit_resume(tmp_path: Path) -> None:
         + '\n',
         encoding='utf-8',
     )
-    before = {
-        unit.unit_id: (unit_dir / f'{unit.unit_id}.parquet').stat() for unit in first.work.units
-    }
     second = plan_term_score(
         extract,
         ate=_score_ate(parent_buckets=4, tail_candidate_row_cap=1),
@@ -1702,9 +1722,11 @@ def test_strategy_cap_change_invalidates_unit_resume(tmp_path: Path) -> None:
         artifact_dir=dest,
     )
     assert second.completed_units == ()
-    for unit_id, stat in before.items():
-        path = unit_dir / f'{unit_id}.parquet'
-        assert not path.is_file() or path.stat().st_ino != stat.st_ino
+    assert all(
+        not (unit_dir / f'{unit_id}.parquet').is_file()
+        or (unit_dir / f'{unit_id}.parquet').read_bytes() != payload
+        for unit_id, payload in stale_bytes.items()
+    )
 
 
 def test_hybrid_compact_merge_unchanged(tmp_path: Path) -> None:

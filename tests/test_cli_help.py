@@ -1,40 +1,29 @@
 """CLI help lists commands and corpus options."""
 
 import re
-import subprocess
-import sys
+
+from tests.cli_text import compact_help, help_text
 
 
 def test_module_help_lists_commands() -> None:
-    result = subprocess.run(
-        [sys.executable, '-m', 'patent_ate', '--help'],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0
-    assert 'corpus' in result.stdout
-    assert 'extract' in result.stdout
-    lowered = result.stdout.lower()
+    text = help_text('--help')
+    assert 'corpus' in text
+    assert 'extract' in text
+    lowered = text.lower()
     assert 'occupy' not in lowered
     assert 'ip-claim' not in lowered
     assert 'ssv' not in lowered
 
 
 def test_corpus_help_lists_sample_options() -> None:
-    result = subprocess.run(
-        [sys.executable, '-m', 'patent_ate', 'corpus', '--help'],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0
-    assert '--output' in result.stdout
-    assert '--input-dir' in result.stdout
-    assert '--limit' in result.stdout
-    assert '--hupd-dir' not in result.stdout
-    assert '--extract-workers' in result.stdout
-    assert '--extract-block-rows' in result.stdout
-    plain = re.sub(r'[^A-Za-z0-9]+', ' ', result.stdout)
+    text = help_text('corpus', '--help')
+    compact = compact_help(text)
+    assert '--output' in compact
+    assert '--input-dir' in compact
+    assert '--limit' in compact
+    assert '--hupd-dir' not in compact
+    assert '--extract-workers' in compact
+    assert '--extract-block-rows' in compact
+    plain = re.sub(r'[^A-Za-z0-9]+', ' ', text)
     assert 'leaves one CPU so Ray can coordinate' in plain
-    assert 'occupy' not in result.stdout.lower()
+    assert 'occupy' not in text.lower()

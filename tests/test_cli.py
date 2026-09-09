@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import re
-import subprocess
-import sys
 from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from tests.cli_text import compact_help, help_text
 
 from patent_ate import __main__ as ate_main
 from patent_ate.extract import write_termhood
@@ -23,38 +22,27 @@ _LEAKS = ('ip-claim', 'ip_claim', 'occupy', 'occupancy', 'ssv', 'gnp')
 
 
 def test_ate_module_help_lists_commands_not_corpus_flags() -> None:
-    result = subprocess.run(
-        [sys.executable, '-m', 'patent_ate', '--help'],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0
-    assert 'corpus' in result.stdout
-    assert 'extract' in result.stdout
-    assert 'score' in result.stdout
-    lowered = result.stdout.lower()
+    text = help_text('--help')
+    assert 'corpus' in text
+    assert 'extract' in text
+    assert 'score' in text
+    lowered = text.lower()
     assert all(token not in lowered for token in _LEAKS)
 
 
 def test_corpus_help_lists_sample_options() -> None:
-    result = subprocess.run(
-        [sys.executable, '-m', 'patent_ate', 'corpus', '--help'],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0
-    assert '--output' in result.stdout
-    assert '--input-dir' in result.stdout
-    assert '--limit' in result.stdout
-    assert '--hupd-dir' not in result.stdout
-    assert '--hupd-limit' not in result.stdout
-    assert '--extract-workers' in result.stdout
-    assert '--extract-block-rows' in result.stdout
-    plain = re.sub(r'[^A-Za-z0-9]+', ' ', result.stdout)
+    text = help_text('corpus', '--help')
+    compact = compact_help(text)
+    assert '--output' in compact
+    assert '--input-dir' in compact
+    assert '--limit' in compact
+    assert '--hupd-dir' not in compact
+    assert '--hupd-limit' not in compact
+    assert '--extract-workers' in compact
+    assert '--extract-block-rows' in compact
+    plain = re.sub(r'[^A-Za-z0-9]+', ' ', text)
     assert 'leaves one CPU so Ray can coordinate' in plain
-    lowered = result.stdout.lower()
+    lowered = text.lower()
     assert all(token not in lowered for token in _LEAKS)
 
 
@@ -205,16 +193,11 @@ def test_ate_run_request_uses_injected_spec(tmp_path: Path) -> None:
 
 
 def test_extract_help_matches_corpus_sample_flags() -> None:
-    result = subprocess.run(
-        [sys.executable, '-m', 'patent_ate', 'extract', '--help'],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0
-    assert '--input-dir' in result.stdout
-    assert '--limit' in result.stdout
-    assert '--hupd-dir' not in result.stdout
-    assert '--output' in result.stdout
-    lowered = result.stdout.lower()
+    text = help_text('extract', '--help')
+    compact = compact_help(text)
+    assert '--input-dir' in compact
+    assert '--limit' in compact
+    assert '--hupd-dir' not in compact
+    assert '--output' in compact
+    lowered = text.lower()
     assert all(token not in lowered for token in _LEAKS)
