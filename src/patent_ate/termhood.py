@@ -132,7 +132,6 @@ class TermhoodTable(BaseModel):
         }
 
     @computed_field
-    @property
     def scores(self) -> dict[str, float]:
         """``log1p(C)`` times Lucene IDF; zero when ``df * df > N`` and ``df < N``."""
         keys = tuple(self.c_values)

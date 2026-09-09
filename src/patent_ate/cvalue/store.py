@@ -217,6 +217,14 @@ class ScoreStageManifest(BaseModel):
     completed: tuple[str, ...] = ()
     completed_units: tuple[str, ...] = ()
 
+    @staticmethod
+    def gsa_fields(ate: AteSpec) -> tuple[str, str, int]:
+        """Return indexed artifact version, engine, and prefix width for ``ate``."""
+        spec = ate.indexed
+        if ate.containment == 'indexed' and spec is not None:
+            return INDEXED_ARTIFACT_VERSION, spec.engine, spec.prefix_bytes
+        return '', '', 0
+
     @classmethod
     def from_ate(
         cls,
@@ -228,8 +236,7 @@ class ScoreStageManifest(BaseModel):
         completed_units: tuple[str, ...] = (),
     ) -> Self:
         """Build a manifest from the current scorer identity and progress."""
-        spec = ate.indexed
-        indexed = ate.containment == 'indexed' and spec is not None
+        indexed_artifact_version, gsa_engine, gsa_prefix_bytes = cls.gsa_fields(ate)
         return cls(
             extract=extract,
             duckdb_memory=ate.duckdb_memory,
@@ -245,9 +252,9 @@ class ScoreStageManifest(BaseModel):
             tail_candidate_row_cap=ate.tail_candidate_row_cap,
             tail_compare_cap=ate.tail_compare_cap,
             containment=ate.containment,
-            indexed_artifact_version=INDEXED_ARTIFACT_VERSION if indexed else '',
-            gsa_engine=spec.engine if indexed else '',
-            gsa_prefix_bytes=spec.prefix_bytes if indexed else 0,
+            indexed_artifact_version=indexed_artifact_version,
+            gsa_engine=gsa_engine,
+            gsa_prefix_bytes=gsa_prefix_bytes,
             total_docs=total_docs,
             completed=completed,
             completed_units=completed_units,
@@ -264,18 +271,11 @@ class ScoreStageManifest(BaseModel):
 
     def unit_config_matches(self, ate: AteSpec) -> bool:
         """Return whether parent units and merge may resume under ``ate``."""
-        spec = ate.indexed
-        indexed = ate.containment == 'indexed' and spec is not None
+        indexed_artifact_version, gsa_engine, gsa_prefix_bytes = self.gsa_fields(ate)
         indexed_ok = (
-            self.indexed_artifact_version == INDEXED_ARTIFACT_VERSION
-            and self.gsa_engine == spec.engine
-            and self.gsa_prefix_bytes == spec.prefix_bytes
-            if indexed
-            else (
-                not self.indexed_artifact_version
-                and not self.gsa_engine
-                and self.gsa_prefix_bytes == 0
-            )
+            self.indexed_artifact_version == indexed_artifact_version
+            and self.gsa_engine == gsa_engine
+            and self.gsa_prefix_bytes == gsa_prefix_bytes
         )
         return (
             self.semantic_version in RESUME_UNIT_SEMANTICS

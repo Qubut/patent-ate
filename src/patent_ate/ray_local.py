@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import os
 from pathlib import Path
+from typing import Any
 
 os.environ['RAY_ENABLE_UV_RUN_RUNTIME_ENV'] = '0'
 
@@ -26,7 +27,8 @@ def ensure_local_ray() -> bool:
         return False
     RAY_TEMP_DIR.mkdir(parents=True, exist_ok=True)
     os.environ['RAY_ENABLE_UV_RUN_RUNTIME_ENV'] = '0'
-    importlib.import_module('ray._private.ray_constants').RAY_ENABLE_UV_RUN_RUNTIME_ENV = False
+    ray_constants: Any = importlib.import_module('ray._private.ray_constants')
+    ray_constants.RAY_ENABLE_UV_RUN_RUNTIME_ENV = False
     library_path = os.environ.get('LD_LIBRARY_PATH')
     runtime_env = {'env_vars': {'LD_LIBRARY_PATH': library_path}} if library_path else None
     ray.init(

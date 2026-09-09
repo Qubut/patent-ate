@@ -9,11 +9,8 @@ import polars as pl
 import structlog
 import typer
 
-from patent_ate.extract import (
-    DUCKDB_TMP_DIRNAME,
-    extract_parquet_parts,
-    score_term_parquet,
-)
+from patent_ate.cvalue import score_term_parquet
+from patent_ate.extract import DUCKDB_TMP_DIRNAME, extract_parquet_parts
 from patent_ate.run import AteRunRequest, run_corpus_ate, run_extract
 from patent_ate.spec import AteSpec
 from patent_ate.termhood import TERMHOOD_META_NAME, TermhoodStore
