@@ -88,6 +88,14 @@ package produced 88,607,764 phrases across 4,518,254 applications. The
 saved columns are the phrase (`key`), C-value (`c_value`), and document
 frequency (`df`).
 
+Most of that C-value sits in short strings. Two-word keys hold about half
+of the positive mass, three-word keys most of the rest; unigrams barely
+register and phrases of six words or more are a thin tail. Nested scoring
+matters because the fragments that inflate a raw count are exactly those
+two- and three-word shells.
+
+![Bar chart of nested C-value mass by number of whitespace tokens](docs/figures/c-mass-by-length.png)
+
 Hyphenation and plural endings stay as written. The table also stores a
 lowercase lookup spelling so either form can be found, which is why
 "lithium ion battery" and "lithium-ion battery" are separate rows.
@@ -110,10 +118,9 @@ single rank.
 | `lithium-ion battery` | 9,028 | 1,756 | 71.5 |
 | `sina molecule` | 86,557 | 317 | 108.7 |
 
-C-value and document frequency share legal headings such as "another
-aspect" when plotted side by side. The left ranking still lists claim
-fragments such as "least a portion"; the right ranking is section titles
-such as "detailed description".
+Side by side, the two rankings share those headings: the left list still
+opens with claim fragments such as "least a portion", and the right list
+is section titles such as "detailed description".
 
 ![Side-by-side bars of C-value leaders and document-frequency leaders](docs/figures/top-c-vs-top-df.png)
 
@@ -122,10 +129,15 @@ can multiply log(1 + C-value) by inverse document frequency, a weight that
 shrinks as a phrase appears in more documents (Sparck Jones, 1972; Lucene
 BM25-style). The product is zero when `df * df` exceeds the document count,
 so a phrase that appears in more than about √N documents drops out of a
-single ranked list. About 8.65 million phrases (9.8%) hit that cutoff,
-including `lithium ion battery` (df 3,018, past √N ≈ 2,126), while the
-hyphenated sibling `lithium-ion battery` (df 1,756) keeps a combined rank
-of 71.5. The published parquet stores phrase, C-value, and document
+single ranked list. Almost every key in the histogram sits at small `df`;
+the long tail past √N ≈ 2,126 is where those headings live, and about
+8.65 million phrases (9.8%) hit the cutoff.
+
+![Log-log histogram of document frequency with a line at the square root of the document count](docs/figures/df-tail.png)
+
+`lithium ion battery` (df 3,018) sits past that line and scores zero;
+the hyphenated sibling `lithium-ion battery` (df 1,756) keeps a combined
+rank of 71.5. The published parquet stores phrase, C-value, and document
 frequency; multiply them in this library when you need one rank.
 
 That product is what ranks rare technical compounds instead of those
