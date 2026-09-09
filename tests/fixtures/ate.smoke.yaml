@@ -1,0 +1,8 @@
+spacy_model: en_core_web_lg
+cpu_job_width: 8
+extract_block_rows: 256
+pipe_docs: 128
+sentence_group: 32
+duckdb_memory: 8GB
+duckdb_threads: 8
+containment: window
