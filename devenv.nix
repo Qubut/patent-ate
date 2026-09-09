@@ -2,6 +2,19 @@
 let
   pythonPackage = pkgs.python312;
   buildingContainer = config.container.isBuilding;
+  figureTexlive = pkgs.texliveSmall.withPackages (
+    ps: with ps; [
+      amsfonts
+      amsmath
+      cm-super
+      dvipng
+      dvisvgm
+      geometry
+      pgf
+      type1cm
+      underscore
+    ]
+  );
 in
 {
   name = "patent-ate";
@@ -11,6 +24,10 @@ in
     TMPDIR = "${config.env.DEVENV_ROOT}/.cache/tmp";
     UV_CACHE_DIR = "${config.env.DEVENV_ROOT}/.cache/uv";
     XDG_CACHE_HOME = "${config.env.DEVENV_ROOT}/.cache";
+    LD_LIBRARY_PATH = lib.makeLibraryPath [
+      pkgs.zlib
+      pkgs.stdenv.cc.cc.lib
+    ];
   };
 
   languages.python = {
@@ -25,6 +42,9 @@ in
     pkgs.git-cliff
     pkgs.uv
     pkgs.ruff
+    pkgs.ghostscript
+    pkgs.zlib
+    figureTexlive
   ];
 
   containers.prod = {

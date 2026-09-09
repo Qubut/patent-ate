@@ -3,19 +3,31 @@
 [![CI](https://github.com/Qubut/patent-ate/actions/workflows/ci.yml/badge.svg)](https://github.com/Qubut/patent-ate/actions/workflows/ci.yml)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Hugging Face](https://img.shields.io/badge/dataset-Qubut%2Fpatent--ate--hupd-yellow.svg)](https://huggingface.co/datasets/Qubut/patent-ate-hupd)
 
-**NLP** · **patents** · **automatic term extraction** · **C-value** · **spaCy** · **JATE** · **DuckDB** · **Ibis** · **Ray**
+patent-ate finds the technical phrases that actually appear in patent text
+and scores each one by how much it behaves like a real term, not a generic
+word.
 
-Automatic term extraction for patent claims, abstracts, and summaries. patent-ate
-lists the multiword terms a corpus actually uses, scores nested frequency with
-C-value, and commits an immutable **termhood** table: each row is a phrase, a
-nested-frequency score, and how many documents contain that phrase.
+Patents repeat short generic words such as "panel" and "method" inside
+longer phrases. "Vehicle interior panel" contains "interior panel" and
+"panel", so counting mentions ranks boilerplate highest. A lawyer or
+engineer looking for the invention then sees "panel" at the top of the list.
 
-`corpus` runs extract and score in one job. Stop after `extract` and run `score`
-later if a parse is interrupted. A finished score writes a generation Parquet
-file, then updates a small manifest.
+C-value is a published score that down-weights those fragments by rewarding
+longer phrases and subtracting the times a short string showed up only
+inside a longer one (Frantzi, Ananiadou, and Mima, [*Automatic recognition
+of multi-word terms: the C-value/NC-value method*](https://link.springer.com/article/10.1007/s007999900023),
+2000). This tool computes that score on a collection of patents, following
+the formula in [JATE](https://github.com/ziqizhang/jate) 3.3, an open-source
+toolkit for ranking phrases, and writes a table of each phrase, its
+C-value, and how many documents contain it.
 
-## Install
+C-value still keeps headings that stand on their own in many patents, such
+as "another aspect". The table therefore also stores document frequency:
+the number of patents that contain the phrase.
+
+## Install and run
 
 ```text
 uv add patent-ate
@@ -27,25 +39,13 @@ Until the first PyPI release, depend on the git repository:
 uv add 'patent-ate @ git+https://github.com/Qubut/patent-ate'
 ```
 
-Python 3.12, CPU only. The default spaCy model is `en_core_web_lg` (pulled as a
-wheel). From a checkout:
+patent-ate reads a directory of JSON files, one patent object per file,
+and looks for text in the `claims`, `abstract`, and `summary` fields.
+Missing fields are skipped. Multi-record Hugging Face files (JSONL or
+Parquet) are not read directly; write one JSON object per file first.
 
-```text
-devenv shell -- uv sync --group dev --group test
-devenv shell -- ruff check src tests
-devenv shell -- ruff format --check src tests
-devenv shell -- mypy src
-devenv shell -- pytest
-```
-
-## Quick start
-
-```text
-patent-ate --help
-python -m patent_ate --help
-```
-
-Sample JSON filings, extract candidates, score C-value, and commit termhood:
+Sample the directory, extract phrases, score them, and write the table in
+one job:
 
 ```text
 patent-ate corpus \
@@ -56,163 +56,133 @@ patent-ate corpus \
   --extract-block-rows 256
 ```
 
-`--extract-workers 0` leaves one CPU so Ray can coordinate. Pass a positive
-count to size the spaCy worker pool. `--config` is optional YAML for the spaCy
-model, DuckDB memory, and containment strategy. Package defaults apply when it
-is omitted.
+`--extract-workers 0` leaves one CPU free for Ray, the library that
+schedules the extraction workers. Pass a positive count to run more
+workers. `--config` is optional YAML for the spaCy English model (the
+parser that finds noun phrases), DuckDB memory, and phrase matching;
+package defaults apply when it is omitted.
 
-Extract only, then score without re-parsing:
+Extract phrases first, then score without re-parsing the JSON:
 
 ```text
 patent-ate extract --output ./termhood --input-dir ./patents --limit 1000
-patent-ate extract-parts ./termhood/extract
 patent-ate score --extract ./termhood/extract --output ./termhood
 ```
 
-## Pipeline
+`inspect` prints how many phrases a saved table contains. The output
+directory can keep more than one scored table from later runs;
+`list-generations` prints those files. The Python package runs the same
+steps: extract a collection, score Parquet files, and open the table the
+output directory currently selects.
 
-1. **Choose filings.** `corpus` and `extract` sample JSON files under
-   `--input-dir`, up to `--limit`. An optional `--index-cache` file can list
-   those paths so the tree is not walked again.
-2. **Extract candidates.** [Ray Data](https://docs.ray.io/en/latest/data/data.html)
-   workers load a [spaCy](https://spacy.io) language model, split each filing
-   into sentence groups, and run [JATE](https://github.com/ziqizhang/jate)
-   noun-phrase and part-of-speech extractors. Each filing becomes one compact
-   Parquet row: term keys, raw frequencies, and the surface strings as they
-   appeared. Output lands under `extract/`. Filings already present are skipped.
-3. **Score nested termhood.** [Ibis](https://ibis-project.org/) compiles C-value
-   over [DuckDB](https://duckdb.org/). The scorer finds which longer candidates
-   contain which shorter ones, subtracts nested frequency, and writes `c_value`
-   plus document frequency (`df`).
-4. **Commit a generation.** The scorer writes `termhood.<generation>.parquet`
-   (columns `key`, `c_value`, `df`) and then replaces `termhood.meta.json`.
-   Incomplete `.partial` files are leftover scratch, not a committed store.
+## Evidence from the Harvard USPTO Patent Dataset
 
-Inspect, list, and reopen generations without running extract again.
+Suzgun, Melas-Kyriazi, Sarkar, Kominers, and Shieber (2022) released the
+**Harvard USPTO Patent Dataset (HUPD)**: English-language US utility
+applications whose JSON objects already carry `claims`, `abstract`, and
+`summary`
+([dataset](https://huggingface.co/datasets/HUPD/hupd),
+[paper](https://arxiv.org/abs/2207.04043),
+[site](https://patentdataset.org)). Scoring that collection with this
+package produced 88,607,764 phrases across 4,518,254 applications. The
+saved columns are the phrase (`key`), C-value (`c_value`), and document
+frequency (`df`).
 
-## Input
+Hyphenation and plural endings stay as written. The table also stores a
+lowercase lookup spelling so either form can be found, which is why
+"lithium ion battery" and "lithium-ion battery" are separate rows.
 
-Commands read a directory of JSON files, one patent object per file. Each object
-should carry text in `claims`, `abstract`, and `summary` (missing fields are
-skipped). Any directory with those fields works.
+On that table, C-value and raw document frequency still agree on legal
+headings. "Least a portion" leads C-value as a high-frequency claim
+fragment that also stands alone; "detailed description" leads `df` as a
+section title. The last column below is a combined rank: a high number is
+a rare technical phrase; zero means the phrase is too common to keep as a
+single rank.
 
-One optional corpus that already uses this layout is the **Harvard USPTO Patent
-Dataset (HUPD)**: English-language US utility applications, released by Suzgun,
-Melas-Kyriazi, Sarkar, Kominers, and Shieber (2022). Dataset card:
-[huggingface.co/datasets/HUPD/hupd](https://huggingface.co/datasets/HUPD/hupd).
-Paper: [arXiv:2207.04043](https://arxiv.org/abs/2207.04043). Site:
-[patentdataset.org](https://patentdataset.org). Point `--input-dir` at a local
-tree of those JSON files, or at any other directory with the same fields.
+| Phrase | C-value | Documents (`df`) | Combined rank |
+| --- | ---: | ---: | ---: |
+| `least a portion` | 2,345,468 | 333,608 | 0 |
+| `another aspect` | 2,080,434 | 694,564 | 0 |
+| `present disclosure` | 1,568,066 | 390,064 | 0 |
+| `computer program product` | 1,381,133 | 154,388 | 0 |
+| `detailed description` | 1,061,982 | 843,582 | 0 |
+| `lithium ion battery` | 22,744 | 3,018 | 0 |
+| `lithium-ion battery` | 9,028 | 1,756 | 71.5 |
+| `sina molecule` | 86,557 | 317 | 108.7 |
 
-Hugging Face JSONL or Parquet shards are not ingested directly. Convert or dump
-to one JSON object per file first.
+C-value and document frequency share legal headings such as "another
+aspect" when plotted side by side. The left ranking still lists claim
+fragments such as "least a portion"; the right ranking is section titles
+such as "detailed description".
 
-## How scoring works
+![Side-by-side bars of C-value leaders and document-frequency leaders](docs/figures/top-c-vs-top-df.png)
 
-Automatic term extraction lists the domain phrases a corpus actually uses.
-Patent prose nests phrases ("vehicle interior panel" contains "interior panel"
-and "panel"). Counting raw frequency ranks the short leftovers highest.
+To down-weight phrases that appear in most of the collection, the library
+can multiply log(1 + C-value) by inverse document frequency, a weight that
+shrinks as a phrase appears in more documents (Sparck Jones, 1972; Lucene
+BM25-style). The product is zero when `df * df` exceeds the document count,
+so a phrase that appears in more than about √N documents drops out of a
+single ranked list. About 8.65 million phrases (9.8%) hit that cutoff,
+including `lithium ion battery` (df 3,018, past √N ≈ 2,126), while the
+hyphenated sibling `lithium-ion battery` (df 1,756) keeps a combined rank
+of 71.5. The published parquet stores phrase, C-value, and document
+frequency; multiply them in this library when you need one rank.
 
-**C-value** is the nested-frequency statistic this package scores, from Frantzi,
-Ananiadou, and Mima, *Automatic recognition of multi-word terms: the
-C-value/NC-value method* (2000, *International Journal on Digital Libraries*;
-[Springer record](https://link.springer.com/article/10.1007/s007999900023)).
-For each candidate phrase:
+That product is what ranks rare technical compounds instead of those
+headings: the left ranking still lists "least a portion", while the right
+ranking lists phrases such as "rf network node" and
+"polymer-anticancer agent conjugate".
 
-- Longer phrases get a length factor (base-2 log of word count). JATE 3.3 uses
-  `log2(length + 0.1)`, matching its published C-value, so a one-word candidate
-  is down-weighted relative to multiword phrases.
-- Nested frequency is subtracted. If "panel" only occurs inside longer
-  candidates, those parent counts are averaged and taken off "panel"'s own
-  count, so generic heads lose when they are leftover fragments.
-- The committed `c_value` column is that nested score.
+![Side-by-side bars of C-value leaders and combined-rank leaders](docs/figures/c-vs-product-score.png)
 
-**JATE** is the Python toolkit whose candidate shapes and C-value formula this
-scorer matches ([github.com/ziqizhang/jate](https://github.com/ziqizhang/jate)).
-Surfaces are the strings as written (hyphens, plural endings). Keys are
-normalized forms. `score` unions both into the committed table so lookups hit
-either spelling.
+## Get the published table
 
-**Containment** is the nested-parent search. Shorter candidates use original-string
-windows with Unicode word-boundary checks (the same JATE word class on both
-paths). Longer candidates can switch to an indexed generalized suffix array
-over concatenated keys, built with
-[pydivsufsort](https://github.com/louisabraham/pydivsufsort) (`divsufsort`).
-Both paths implement the same JATE containment predicate; they are execution
-strategies for the same score.
-
-**Document frequency (`df`)** is how many filings contain the key. Inverse
-document frequency (IDF) down-weights phrases that appear in most of the
-corpus (legal boilerplate such as "another aspect"). See Sparck Jones,
-*A statistical interpretation of term specificity and its application in
-retrieval* (1972). The fact table stores raw `c_value` and `df`. The package
-already forms a single number per key: `product_score_expr` is `log1p` of
-non-negative C-value times a [Lucene](https://lucene.apache.org/) BM25-style
-IDF, and is zero when `df * df` exceeds the document count (while `df` is
-still less than that count). That expression lives in this library. It is not
-a separate product.
-
-## Python
+A 3,393-row preview on
+[Qubut/patent-ate-hupd](https://huggingface.co/datasets/Qubut/patent-ate-hupd)
+mixes C-value leaders, high-`df` headings, combined-rank leaders, phrases
+of different lengths, and a random draw. Load that slice before fetching
+the full parquet.
 
 ```python
-from pathlib import Path
+from datasets import load_dataset
 
-from patent_ate import AteSpec, TermhoodStore, corpus_termhood
-
-root = corpus_termhood(
-    tuple(sorted(Path('patents').glob('*.json')))[:1000],
-    ate=AteSpec(),
-    chunk_size=64,
-    workers=0,
-    artifact_dir=Path('termhood'),
-)
-store = TermhoodStore.open(root)
-by_score, by_df, n_positive = store.report_ranks(20)
+preview = load_dataset('Qubut/patent-ate-hupd', 'slice', split='preview')
 ```
 
-`write-termhood` / `TermhoodStore.write_frame` publishes a generation from a
-`key` / `c_value` / `df` Parquet file and replaces the manifest last.
+```python
+import polars as pl
 
-## Generations
+pl.scan_parquet(
+    'hf://datasets/Qubut/patent-ate-hupd/slice/preview.parquet'
+).head(20).collect()
+```
+
+```python
+import duckdb
+
+con = duckdb.connect('preview.duckdb')  # download slice/preview.duckdb
+con.sql("SELECT * FROM termhood_slice WHERE stratum = 'top_score' LIMIT 10")
+```
+
+`load_dataset('Qubut/patent-ate-hupd', split='termhood')` opens the full
+table. The derived phrase table follows HUPD's license (CC BY-NC-SA 4.0);
+this software is MIT.
+
+## Development
+
+In a local clone, Python 3.12 tools come from devenv:
 
 ```text
-patent-ate write-termhood --input ./keys.parquet --output ./termhood --total-docs 1000
-patent-ate read-termhood ./termhood
-patent-ate inspect ./termhood
-patent-ate inspect ./termhood/termhood.<generation>.parquet
-patent-ate list-generations ./termhood
+devenv shell -- uv sync --group dev --group test
+devenv shell -- ruff check src tests
+devenv shell -- ruff format --check src tests
+devenv shell -- mypy src
+devenv shell -- pytest
 ```
 
-`read-termhood` prints the manifest, and fails if the sidecar is missing or
-mismatches the fact table. `inspect` prints the row count after schema checks
-(unique keys, finite C-values, non-negative `df`). `list-generations` names
-every `termhood.<generation>.parquet` and marks the file the manifest currently
-points at.
-
-## Container
-
-devenv builds a CPU image whose entrypoint is `patent-ate` (no CUDA). After a
-`main` or `v*` CI run:
-
-```text
-devenv container --registry docker://ghcr.io/qubut/ copy prod
-```
-
-The image name is `ghcr.io/qubut/patent-ate`.
-
-## Changelog and publish
-
-Conventional commits. On `v*` tags, git-cliff regenerates `CHANGELOG.md` before
-the publish workflow uploads the wheel:
-
-```text
-devenv shell -- git-cliff -o CHANGELOG.md
-```
-
-Wheels go to pypi.org through GitHub Actions OIDC (Trusted Publishing). Register
-a pending publisher on pypi.org for project `patent-ate`, repository
-`Qubut/patent-ate`, workflow `publish.yml`, environment `pypi`.
+The CPU image `ghcr.io/qubut/patent-ate` has entrypoint `patent-ate`. Tags
+and conventional-commit changelogs follow `v*` releases.
 
 ## License
 
-MIT
+[MIT](./LICENSE)
