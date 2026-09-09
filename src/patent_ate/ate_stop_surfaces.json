@@ -1,0 +1,24 @@
+{
+  "source": "USPTO Full-Text stopwords (99), Sarica and Luo 2021 technical list, MPEP 2111.03 stems, WIPO ST.25 / MPEP 2422 sequence-identifier tokens",
+  "determiners": ["a", "an", "the", "said", "this", "that", "these", "those"],
+  "surfaces": [
+    "a", "accordance", "according", "all", "also", "an", "and", "another", "are", "as", "at",
+    "be", "because", "been", "being", "by", "claim", "comprise", "comprises", "comprising",
+    "consist", "consisting", "corresponding", "could", "described", "desired", "do", "does",
+    "each", "embodiment", "essentially", "fig", "figs", "for", "from", "further", "generally",
+    "had", "has", "have", "having", "herein", "however", "id", "identifier", "if", "in", "into", "invention",
+    "is", "it", "its", "means", "no", "not", "now", "of", "on", "onto", "or", "other",
+    "particularly", "preferably", "preferred", "present", "provide", "provided", "respectively",
+    "said", "seq", "sequence", "should", "since", "some", "such", "than", "that", "the", "their", "then",
+    "there", "thereby", "therefore", "thereof", "thereto", "these", "they", "this", "those",
+    "thus", "to", "use", "various", "was", "were", "what", "when", "where", "whereby",
+    "wherein", "which", "while", "who", "will", "with", "would",
+    "able", "above-mentioned", "accordingly", "across", "along", "already", "alternatively",
+    "always", "among", "and/or", "anything", "anywhere", "apparatus", "device", "disclose",
+    "finally", "forward", "hence", "ie", "ii", "iii", "include", "instead", "later", "least",
+    "like", "little", "many", "may", "method", "might", "never", "often", "one", "others",
+    "otherwise", "overall", "plurality", "rather", "remarkably", "significantly", "simply",
+    "sometimes", "specifically", "straight", "system", "via", "vice", "whereas", "whereat",
+    "wherever", "whether", "whose", "within", "without", "yet"
+  ]
+}
