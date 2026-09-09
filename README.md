@@ -1,47 +1,100 @@
 # patent-ate
 
-patent-ate extracts ranked multiword terms from patent text. Given claims,
-abstracts, and summaries, it writes a **termhood** table: each row is a phrase,
-a nested-frequency score (C-value), and how many documents contain that phrase.
+[![CI](https://github.com/Qubut/patent-ate/actions/workflows/ci.yml/badge.svg)](https://github.com/Qubut/patent-ate/actions/workflows/ci.yml)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-`corpus` runs that job end to end. `extract` then `score` is the same pipeline
-split so a stopped extract can be scored later. A finished score writes an
-immutable generation file, then updates a small manifest.
+**NLP** · **patents** · **automatic term extraction** · **C-value** · **spaCy** · **JATE** · **DuckDB** · **Ibis** · **Ray**
 
-## What the pipeline does
+Automatic term extraction for patent claims, abstracts, and summaries. patent-ate
+lists the multiword terms a corpus actually uses, scores nested frequency with
+C-value, and commits an immutable **termhood** table: each row is a phrase, a
+nested-frequency score, and how many documents contain that phrase.
 
-1. **Choose filings.** The `corpus` and `extract` commands sample JSON files
-   under `--input-dir`, up to `--limit`. An optional `--index-cache` file can
-   list those paths so the tree is not walked again.
-2. **Extract candidates.** Parallel workers load a [spaCy](https://spacy.io)
-   language model, split each filing into sentence groups, and run
-   [JATE](https://github.com/ziqizhang/jate) noun-phrase and part-of-speech
-   extractors. Each filing becomes one compact Parquet row: term keys, raw
-   frequencies, and the surface strings as they appeared. Output lands under
-   `extract/`. Filings already present are skipped, so a stopped job can
-   continue.
+`corpus` runs extract and score in one job. Stop after `extract` and run `score`
+later if a parse is interrupted. A finished score writes a generation Parquet
+file, then updates a small manifest.
+
+## Install
+
+```text
+uv add patent-ate
+```
+
+Until the first PyPI release, depend on the git repository:
+
+```text
+uv add 'patent-ate @ git+https://github.com/Qubut/patent-ate'
+```
+
+Python 3.12, CPU only. The default spaCy model is `en_core_web_lg` (pulled as a
+wheel). From a checkout:
+
+```text
+devenv shell -- uv sync --group dev --group test
+devenv shell -- ruff check src tests
+devenv shell -- ruff format --check src tests
+devenv shell -- mypy src
+devenv shell -- pytest
+```
+
+## Quick start
+
+```text
+patent-ate --help
+python -m patent_ate --help
+```
+
+Sample JSON filings, extract candidates, score C-value, and commit termhood:
+
+```text
+patent-ate corpus \
+  --output ./termhood \
+  --input-dir ./patents \
+  --limit 1000 \
+  --extract-workers 0 \
+  --extract-block-rows 256
+```
+
+`--extract-workers 0` leaves one CPU so Ray can coordinate. Pass a positive
+count to size the spaCy worker pool. `--config` is optional YAML for the spaCy
+model, DuckDB memory, and containment strategy. Package defaults apply when it
+is omitted.
+
+Extract only, then score without re-parsing:
+
+```text
+patent-ate extract --output ./termhood --input-dir ./patents --limit 1000
+patent-ate extract-parts ./termhood/extract
+patent-ate score --extract ./termhood/extract --output ./termhood
+```
+
+## Pipeline
+
+1. **Choose filings.** `corpus` and `extract` sample JSON files under
+   `--input-dir`, up to `--limit`. An optional `--index-cache` file can list
+   those paths so the tree is not walked again.
+2. **Extract candidates.** [Ray Data](https://docs.ray.io/en/latest/data/data.html)
+   workers load a [spaCy](https://spacy.io) language model, split each filing
+   into sentence groups, and run [JATE](https://github.com/ziqizhang/jate)
+   noun-phrase and part-of-speech extractors. Each filing becomes one compact
+   Parquet row: term keys, raw frequencies, and the surface strings as they
+   appeared. Output lands under `extract/`. Filings already present are skipped.
 3. **Score nested termhood.** [Ibis](https://ibis-project.org/) compiles C-value
-   over [DuckDB](https://duckdb.org/), reading those Parquet parts without
-   loading the whole vocabulary into Python. The scorer finds which longer
-   candidates contain which shorter ones, subtracts nested frequency, and
-   writes `c_value` plus document frequency (`df`).
+   over [DuckDB](https://duckdb.org/). The scorer finds which longer candidates
+   contain which shorter ones, subtracts nested frequency, and writes `c_value`
+   plus document frequency (`df`).
 4. **Commit a generation.** The scorer writes `termhood.<generation>.parquet`
    (columns `key`, `c_value`, `df`) and then replaces `termhood.meta.json`.
-   The manifest names the generation, document count, and key count.
    Incomplete `.partial` files are leftover scratch, not a committed store.
 
-You can stop after extract and score later. You can inspect, list, and reopen
-generations without running extract again.
-
-Extract uses [Ray Data](https://docs.ray.io/en/latest/data/data.html) so spaCy
-runs in a process pool. Scoring uses Ibis so the nested-frequency SQL stays
-typed.
+Inspect, list, and reopen generations without running extract again.
 
 ## Input
 
-Commands read a directory of JSON files, one patent object per file. Each
-object should carry text in `claims`, `abstract`, and `summary` (missing fields
-are skipped). Any directory with those fields works.
+Commands read a directory of JSON files, one patent object per file. Each object
+should carry text in `claims`, `abstract`, and `summary` (missing fields are
+skipped). Any directory with those fields works.
 
 One optional corpus that already uses this layout is the **Harvard USPTO Patent
 Dataset (HUPD)**: English-language US utility applications, released by Suzgun,
@@ -86,7 +139,7 @@ paths). Longer candidates can switch to an indexed generalized suffix array
 over concatenated keys, built with
 [pydivsufsort](https://github.com/louisabraham/pydivsufsort) (`divsufsort`).
 Both paths implement the same JATE containment predicate; they are execution
-strategies for the same score, not different scores.
+strategies for the same score.
 
 **Document frequency (`df`)** is how many filings contain the key. Inverse
 document frequency (IDF) down-weights phrases that appear in most of the
@@ -99,38 +152,28 @@ IDF, and is zero when `df * df` exceeds the document count (while `df` is
 still less than that count). That expression lives in this library. It is not
 a separate product.
 
-## Command-line walkthrough
+## Python
 
-```text
-patent-ate --help
-python -m patent_ate --help
+```python
+from pathlib import Path
+
+from patent_ate import AteSpec, TermhoodStore, corpus_termhood
+
+root = corpus_termhood(
+    tuple(sorted(Path('patents').glob('*.json')))[:1000],
+    ate=AteSpec(),
+    chunk_size=64,
+    workers=0,
+    artifact_dir=Path('termhood'),
+)
+store = TermhoodStore.open(root)
+by_score, by_df, n_positive = store.report_ranks(20)
 ```
 
-**Sample, extract, score, and commit** in one job:
+`write-termhood` / `TermhoodStore.write_frame` publishes a generation from a
+`key` / `c_value` / `df` Parquet file and replaces the manifest last.
 
-```text
-patent-ate corpus \
-  --output ./termhood \
-  --input-dir ./patents \
-  --limit 1000 \
-  --extract-workers 0 \
-  --extract-block-rows 256
-```
-
-`--extract-workers 0` leaves one CPU so Ray can coordinate. Pass a positive
-count to size the spaCy worker pool. `--config` is optional YAML for the spaCy
-model, DuckDB memory, and containment strategy. Package defaults apply when it
-is omitted.
-
-**Extract only**, then **score** without re-parsing:
-
-```text
-patent-ate extract --output ./termhood --input-dir ./patents --limit 1000
-patent-ate extract-parts ./termhood/extract
-patent-ate score --extract ./termhood/extract --output ./termhood
-```
-
-**Write, read, inspect, and list generations:**
+## Generations
 
 ```text
 patent-ate write-termhood --input ./keys.parquet --output ./termhood --total-docs 1000
@@ -140,43 +183,16 @@ patent-ate inspect ./termhood/termhood.<generation>.parquet
 patent-ate list-generations ./termhood
 ```
 
-`write-termhood` publishes a new generation from a `key` / `c_value` / `df`
-Parquet file and replaces the manifest last. `read-termhood` prints that
-manifest, and fails if the sidecar is missing or mismatches the fact table.
-`inspect` prints the row count after schema checks (unique keys, finite
-C-values, non-negative `df`). `list-generations` names every
-`termhood.<generation>.parquet` and marks the file the manifest currently
+`read-termhood` prints the manifest, and fails if the sidecar is missing or
+mismatches the fact table. `inspect` prints the row count after schema checks
+(unique keys, finite C-values, non-negative `df`). `list-generations` names
+every `termhood.<generation>.parquet` and marks the file the manifest currently
 points at.
-
-The Python package exposes the same jobs: extract a corpus, score compact
-Parquet, open a committed store, and load scoring settings.
-
-## Install
-
-```text
-uv add patent-ate
-```
-
-Until the first PyPI release, depend on the git repository or a local clone:
-
-```text
-uv add 'patent-ate @ git+https://github.com/Qubut/patent-ate'
-```
-
-From a checkout, Python 3.12 tools come from devenv:
-
-```text
-devenv shell -- uv sync --group dev --group test
-devenv shell -- ruff check src tests
-devenv shell -- ruff format --check src tests
-devenv shell -- mypy src
-devenv shell -- pytest
-```
 
 ## Container
 
 devenv builds a CPU image whose entrypoint is `patent-ate` (no CUDA). After a
-`main` / `master` or `v*` CI run:
+`main` or `v*` CI run:
 
 ```text
 devenv container --registry docker://ghcr.io/qubut/ copy prod
