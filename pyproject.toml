@@ -43,6 +43,7 @@ dependencies = [
   "pydivsufsort>=0.0.20",
   "returns>=0.25.0",
   "en-core-web-lg",
+  "sqlglot>=23.4,!=26.32.0,<30",
 ]
 
 [dependency-groups]
@@ -52,6 +53,7 @@ dev = [
 ]
 test = [
   "pytest>=8.3.0",
+  "hypothesis>=6.0",
   "en-core-web-sm",
 ]
 
@@ -119,6 +121,9 @@ testpaths = ["tests"]
 python_files = "test_*.py"
 xfail_strict = true
 addopts = ["--strict-config","--strict-markers","-ra"]
+markers = [
+  "benchmark: machine-local C-value timing gate",
+]
 filterwarnings = [
   "error",
   "ignore:.*corpus-level ranking algorithm.*:UserWarning",
@@ -126,6 +131,7 @@ filterwarnings = [
   "ignore:.*use_push_based_shuffle.*:DeprecationWarning",
   "ignore:.*fetch_arrow_table.*is deprecated.*:DeprecationWarning",
   "ignore:.*CUDA initialization.*:UserWarning",
+  "ignore:In Polars 2.0, the default behavior for `empty_as_null`:DeprecationWarning",
 ]
 
 [tool.mypy]

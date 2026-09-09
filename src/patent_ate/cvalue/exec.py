@@ -106,6 +106,11 @@ class ScoreStageExecutor:
             raise unsafe_perform_io(result.failure())
         return unsafe_perform_io(result.unwrap())
 
+    def replace_temp_table(self, connection: Backend, name: str, expr: Table) -> Table:
+        """Create a temp table, dropping any previous table of the same name."""
+        connection.raw_sql(f'DROP TABLE IF EXISTS "{name}"')
+        return connection.create_table(name, expr, temp=True)
+
     def write_table(
         self,
         connection: Backend,
@@ -116,7 +121,7 @@ class ScoreStageExecutor:
         """Write ``expr`` through a typed temp table to ``dest``."""
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = f'_{dest.name.replace(".", "_")}_typed'
-        connection.create_table(tmp, expr.cast(casts), temp=True, overwrite=True)
+        self.replace_temp_table(connection, tmp, expr.cast(casts))
         connection.table(tmp).to_parquet(dest)
         return int(connection.read_parquet(dest).count().to_pyarrow().as_py() or 0)
 
@@ -447,14 +452,14 @@ class ScoreStageExecutor:
         def write(connection: Backend) -> int:
             batch_started = time.perf_counter()
             stats = connection.read_parquet(stats_path)
-            connection.create_table('_term_stats', stats, temp=True, overwrite=True)
-            connection.create_table(
+            self.replace_temp_table(connection, '_term_stats', stats)
+            self.replace_temp_table(
+                connection,
                 '_identity',
                 connection.read_parquet(work / indexed.IDENTITY_NAME),
-                temp=True,
-                overwrite=True,
             )
-            connection.create_table(
+            self.replace_temp_table(
+                connection,
                 '_batch_intervals',
                 connection.read_parquet(work / indexed.KEY_INTERVALS_NAME).inner_join(
                     connection.read_parquet(work / indexed.INTERVAL_CHUNKS_NAME).filter(
@@ -462,16 +467,13 @@ class ScoreStageExecutor:
                     ),
                     'color',
                 ),
-                temp=True,
-                overwrite=True,
             )
-            connection.create_table(
+            self.replace_temp_table(
+                connection,
                 '_sa_color_band',
                 connection.read_parquet(work / indexed.SA_COLOR_NAME).filter(
                     (ibis._.rank >= band_lo) & (ibis._.rank < band_hi)
                 ),
-                temp=True,
-                overwrite=True,
             )
             _log.info(
                 'patent_ate.score.stage',
