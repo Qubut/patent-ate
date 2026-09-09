@@ -1,0 +1,118 @@
+[project]
+name = "patent-ate"
+version = "0.1.0"
+description = "Extract ranked multiword terms from patent text into an immutable termhood table."
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+authors = [{ name = "Qubut" }]
+license = { text = "MIT" }
+dependencies = [
+  "pydantic>=2.10.0",
+  "pyyaml>=6.0.0",
+  "typer>=0.15.0",
+  "structlog>=25.5.0",
+  "polars>=1.31.0",
+  "pyarrow>=18.0.0",
+  "duckdb>=1.5.5",
+  "ibis-framework[duckdb]>=12.0.0",
+  "ray[data]>=2.50",
+  "spacy>=3.8.0",
+  "jate>=3.3.0",
+  "ahocorasick_rs==1.0.3",
+  "numpy>=2.0.0",
+  "pydivsufsort>=0.0.20",
+  "returns>=0.25.0",
+  "en-core-web-lg",
+]
+
+[dependency-groups]
+dev = [
+  "mypy>=1.13.0",
+  "ruff>=0.11.0",
+]
+test = [
+  "pytest>=8.3.0",
+  "en-core-web-sm",
+]
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["patent_ate*"]
+
+[tool.setuptools.package-data]
+patent_ate = ["ate_stop_surfaces.json"]
+
+[project.scripts]
+patent-ate = "patent_ate.__main__:main"
+
+[tool.uv]
+default-groups = ["dev", "test"]
+
+[tool.uv.sources]
+en-core-web-lg = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl" }
+en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }
+
+[tool.ruff]
+src = ["src", "tests"]
+preview = true
+fix = true
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.format]
+quote-style = "single"
+docstring-code-format = true
+
+[tool.ruff.lint]
+select = [
+  "A","B","C4","C90","COM","D","DTZ","E","ERA","EXE","F","FBT","FLY","FURB",
+  "G","I","ICN","ISC","LOG","N","PERF","PIE","PL","PT","PTH","Q","RET","RSE",
+  "RUF","S","SIM","SLF","SLOT","T100","TRY","UP","W","YTT",
+]
+ignore = [
+  "A005","COM812","D100","D101","D104","D106","D107","D203","D212","D401","D404","D405",
+  "FBT003","ISC001","ISC003","N812","PLR09","PLR2004","PLR6301","TRY003",
+]
+
+[tool.ruff.lint.flake8-quotes]
+inline-quotes = "single"
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.mccabe]
+max-complexity = 7
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101","S105","S106","S404","S603","S607","D","PT011","PLC2701","SLF001","RUF012"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+xfail_strict = true
+addopts = ["--strict-config","--strict-markers","-ra"]
+filterwarnings = [
+  "error",
+  "ignore:.*corpus-level ranking algorithm.*:UserWarning",
+  "ignore::DeprecationWarning:ray.data.context",
+  "ignore:.*use_push_based_shuffle.*:DeprecationWarning",
+  "ignore:.*fetch_arrow_table.*is deprecated.*:DeprecationWarning",
+  "ignore:.*CUDA initialization.*:UserWarning",
+]
+
+[tool.mypy]
+files = ["src"]
+python_version = "3.12"
+strict = true
+plugins = ["returns.contrib.mypy.returns_plugin"]
+ignore_missing_imports = true
+local_partial_types = true
+warn_unreachable = true
+enable_error_code = [
+  "truthy-bool","truthy-iterable","redundant-expr","unused-awaitable",
+  "possibly-undefined","redundant-self","unimported-reveal","deprecated",
+]
