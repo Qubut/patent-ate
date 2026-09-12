@@ -1,6 +1,6 @@
 [project]
 name = "patent-ate"
-version = "1.0.0"
+version = "1.0.0.post1"
 description = "Extract ranked multiword terms from patent text into an immutable termhood table."
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
