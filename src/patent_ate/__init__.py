@@ -16,12 +16,9 @@ __all__ = [
     'AteSpec',
     'TermhoodIndex',
     'TermhoodStore',
-    '__version__',
     'corpus_termhood',
     'extract_corpus',
     'extract_parquet_parts',
     'score_term_parquet',
     'write_termhood',
 ]
-
-__version__ = '0.1.0'
