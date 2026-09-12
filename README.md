@@ -23,20 +23,14 @@ toolkit for ranking phrases, and writes a table of each phrase, its
 C-value, and how many documents contain it.
 
 C-value still keeps headings that stand on their own in many patents, such
-as the phraes "another aspect". The table therefore also stores document frequency:
+as the phrase "another aspect". The table therefore also stores document frequency:
 the number of patents that contain the phrase. We use it as a cutoff
-threshold on [HUPD](https://huggingface.co/datasets/HUPD/hupd).
+threshold see: [HUPD](#evidence-from-the-harvard-uspto-patent-dataset).
 
 ## Install and run
 
 ```text
 uv add patent-ate
-```
-
-Until the first PyPI release, depend on the git repository:
-
-```text
-uv add 'patent-ate @ git+https://github.com/Qubut/patent-ate'
 ```
 
 patent-ate reads a directory of JSON files, one patent object per file,
@@ -71,34 +65,32 @@ patent-ate score --extract ./termhood/extract --output ./termhood
 
 `inspect` prints how many phrases a saved table contains. The output
 directory can keep more than one scored table from later runs;
-`list-generations` prints those files. The Python package runs the same
-steps: extract a collection, score Parquet files, and open the table the
-output directory currently selects.
+`list-generations` prints those files.
 
 ## Use as a library
 
-`uv add patent-ate` installs the same package the CLI uses. The extract and
-score steps run in-process through the names re-exported from `patent_ate`.
-`AteSpec()` is the default extract and scoring settings, including the spaCy
-model `en_core_web_lg`.
+`pip install patent-ate` (or `uv add patent-ate`) installs the same package the CLI uses; the functions behind the CLI are exported from the `patent_ate` package.
 
-Open a committed termhood directory and build the in-memory product-score
-map:
+### Quick start
+
+The 88-million-phrase table scored over the [Harvard USPTO Patent Dataset (HUPD)](https://huggingface.co/datasets/HUPD/hupd) is published on [Hugging Face](https://huggingface.co/) at [Qubut/patent-ate-hupd](https://huggingface.co/datasets/Qubut/patent-ate-hupd). Read it straight from the Hub with [Polars](https://pola.rs/):
 
 ```python
-from pathlib import Path
+import polars as pl
 
-from patent_ate import TermhoodIndex, TermhoodStore
-
-store = TermhoodStore.open(Path('./termhood'))
-index = TermhoodIndex.from_store(store)
+row = (
+    pl.scan_parquet('hf://datasets/Qubut/patent-ate-hupd/slice/preview.parquet')
+    .filter(pl.col('key') == 'lithium-ion battery')
+    .select('key', 'c_value', 'df')
+    .collect()
+)
 ```
 
-`TermhoodStore.open` resolves the generation the directory's manifest names.
-`TermhoodIndex.from_store` scans that parquet once.
+Each row has three columns: `key` (the phrase), `c_value`, and `df`. The full table is the `termhood` split of the same dataset; see [Get the published table](#get-the-published-table).
 
-Extract compact parquet, then score it, with the same worker defaults the
-CLI uses (`chunk_size=64`, `workers=0`):
+### Extract and score your own patents
+
+Point the library at a directory of patent JSON files, one patent per file, with `claims`, `abstract`, and `summary` fields. `AteSpec()` holds the defaults: the [spaCy](https://spacy.io/) model `en_core_web_lg`, [DuckDB](https://duckdb.org/) memory, and the row block sizes. `extract_corpus` writes the extracted candidates to a Parquet file; `score_term_parquet` reads that and writes the scored table.
 
 ```python
 from pathlib import Path
@@ -116,7 +108,7 @@ extract_dir = extract_corpus(
     workers=0,
     artifact_dir=root,
 )
-output = score_term_parquet(
+score_term_parquet(
     extract_dir,
     ate=ate,
     temp_dir=root / 'duckdb_tmp',
@@ -124,30 +116,18 @@ output = score_term_parquet(
 )
 ```
 
-`corpus_termhood` runs those two steps in one call and returns the artifact
-directory. `extract_parquet_parts(extract_dir)` lists the compact extract
-files. `write_termhood` commits an in-memory table from
-`patent_ate.termhood.TermhoodTable`.
+`workers=0` leaves one CPU free for [Ray](https://www.ray.io/), the scheduler that runs the extraction workers; pass a positive count to use more. `corpus_termhood` runs both steps in one call with the same arguments and returns the output directory.
 
-Look up C-value and document frequency on the opened fact table, or the
-combined product score on the index:
+### Open a scored table and look up a phrase
+
+Open a table you produced with `TermhoodStore.open`; `store.parquet` is the scored Parquet, so the same Polars scan from the quick start works on it. For the combined score (C-value down-weighted by document frequency, so common headings drop out), build a `TermhoodIndex` and call `score`:
 
 ```python
-from pathlib import Path
-
-import polars as pl
-
 from patent_ate import TermhoodIndex, TermhoodStore
 
 store = TermhoodStore.open(Path('./termhood'))
-row = (
-    pl.scan_parquet(store.parquet)
-    .filter(pl.col('key') == 'lithium-ion battery')
-    .select('key', 'c_value', 'df')
-    .collect()
-)
 index = TermhoodIndex.from_store(store)
-combined = index.score('lithium-ion battery')
+index.score('lithium-ion battery')
 ```
 
 ## Evidence from the Harvard USPTO Patent Dataset
@@ -212,8 +192,8 @@ the long tail past √N ≈ 2,126 is where those headings live, and about
 
 `lithium ion battery` (df 3,018) sits past that line and scores zero;
 the hyphenated sibling `lithium-ion battery` (df 1,756) keeps a combined
-rank of 71.5. The published parquet stores phrase, C-value, and document
-frequency; multiply them in this library when you need one rank.
+rank of 71.5. The published table stores the raw columns; the library
+computes the combined rank from them.
 
 That product is what ranks rare technical compounds instead of those
 headings: the left ranking still lists "least a portion", while the right
@@ -234,14 +214,6 @@ the full parquet.
 from datasets import load_dataset
 
 preview = load_dataset('Qubut/patent-ate-hupd', 'slice', split='preview')
-```
-
-```python
-import polars as pl
-
-pl.scan_parquet(
-    'hf://datasets/Qubut/patent-ate-hupd/slice/preview.parquet'
-).head(20).collect()
 ```
 
 ```python
