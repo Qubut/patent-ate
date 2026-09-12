@@ -9,12 +9,11 @@ patent-ate finds the technical phrases that actually appear in patent text
 and scores each one by how much it behaves like a real term, not a generic
 word.
 
-Patents repeat short generic words such as "panel" and "method" inside
-longer phrases. "Vehicle interior panel" contains "interior panel" and
-"panel", so counting mentions ranks boilerplate highest. A lawyer or
-engineer looking for the invention then sees "panel" at the top of the list.
+Patents repeat short generic words and terms for example if we take the phrase "Vehicle interior panel" we have the generic terms "panel" and "method" inside
+"interior panel" which itself is inside the main phrase, so counting mentioned terms ranks boilerplate highest; for a lawyer or
+engineer looking for the invention then sees these generic terms such as "panel" at the top of the list.
 
-C-value is a published score that down-weights those fragments by rewarding
+To filter down these fragements we use C-value a published score that down-weights those fragments by rewarding
 longer phrases and subtracting the times a short string showed up only
 inside a longer one (Frantzi, Ananiadou, and Mima, [*Automatic recognition
 of multi-word terms: the C-value/NC-value method*](https://link.springer.com/article/10.1007/s007999900023),
@@ -24,8 +23,9 @@ toolkit for ranking phrases, and writes a table of each phrase, its
 C-value, and how many documents contain it.
 
 C-value still keeps headings that stand on their own in many patents, such
-as "another aspect". The table therefore also stores document frequency:
-the number of patents that contain the phrase.
+as the phraes "another aspect". The table therefore also stores document frequency:
+the number of patents that contain the phrase. We use it as a cutoff
+threshold on [HUPD](https://huggingface.co/datasets/HUPD/hupd).
 
 ## Install and run
 
@@ -74,6 +74,81 @@ directory can keep more than one scored table from later runs;
 `list-generations` prints those files. The Python package runs the same
 steps: extract a collection, score Parquet files, and open the table the
 output directory currently selects.
+
+## Use as a library
+
+`uv add patent-ate` installs the same package the CLI uses. The extract and
+score steps run in-process through the names re-exported from `patent_ate`.
+`AteSpec()` is the default extract and scoring settings, including the spaCy
+model `en_core_web_lg`.
+
+Open a committed termhood directory and build the in-memory product-score
+map:
+
+```python
+from pathlib import Path
+
+from patent_ate import TermhoodIndex, TermhoodStore
+
+store = TermhoodStore.open(Path('./termhood'))
+index = TermhoodIndex.from_store(store)
+```
+
+`TermhoodStore.open` resolves the generation the directory's manifest names.
+`TermhoodIndex.from_store` scans that parquet once.
+
+Extract compact parquet, then score it, with the same worker defaults the
+CLI uses (`chunk_size=64`, `workers=0`):
+
+```python
+from pathlib import Path
+
+from patent_ate import AteSpec, extract_corpus, score_term_parquet
+
+ate = AteSpec()
+paths = tuple(sorted(Path('./patents').rglob('*.json')))
+root = Path('./termhood')
+
+extract_dir = extract_corpus(
+    paths,
+    ate=ate,
+    chunk_size=64,
+    workers=0,
+    artifact_dir=root,
+)
+output = score_term_parquet(
+    extract_dir,
+    ate=ate,
+    temp_dir=root / 'duckdb_tmp',
+    artifact_dir=root,
+)
+```
+
+`corpus_termhood` runs those two steps in one call and returns the artifact
+directory. `extract_parquet_parts(extract_dir)` lists the compact extract
+files. `write_termhood` commits an in-memory table from
+`patent_ate.termhood.TermhoodTable`.
+
+Look up C-value and document frequency on the opened fact table, or the
+combined product score on the index:
+
+```python
+from pathlib import Path
+
+import polars as pl
+
+from patent_ate import TermhoodIndex, TermhoodStore
+
+store = TermhoodStore.open(Path('./termhood'))
+row = (
+    pl.scan_parquet(store.parquet)
+    .filter(pl.col('key') == 'lithium-ion battery')
+    .select('key', 'c_value', 'df')
+    .collect()
+)
+index = TermhoodIndex.from_store(store)
+combined = index.score('lithium-ion battery')
+```
 
 ## Evidence from the Harvard USPTO Patent Dataset
 
