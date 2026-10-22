@@ -591,7 +591,7 @@ class ScoreStageExecutor:
         counted = getattr(os, 'process_cpu_count', os.cpu_count)
         host_cpus = max(1, int(counted() or os.cpu_count() or 1))
         n_workers = min(INDEXED_CONTRIB_BATCH_WORKERS, max(1, n_batches), host_cpus)
-        threads_each = max(1, host_cpus // n_workers)
+        threads_each = max(1, min(self._ate.duckdb_threads, host_cpus // n_workers))
 
         def share_memory(limit: str, parts: int) -> str:
             match = re.fullmatch(r'(\d+)([KMGTP]?B)', limit.replace(' ', ''), flags=re.IGNORECASE)
