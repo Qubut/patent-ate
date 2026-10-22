@@ -114,3 +114,23 @@ def test_quantity_noun_phrases_are_not_admitted(sentence: str, phrase: str) -> N
     doc: Doc = host()(sentence)
     start = sentence.index(phrase)
     assert JateDraw.pieces(doc, start, start + len(phrase), phrase.lower(), phrase) == ()
+
+
+def test_quantifier_outside_the_key_keeps_the_key() -> None:
+    sentence = 'The method is shown in one or more non-limiting embodiments.'
+    phrase = 'non-limiting embodiments'
+    doc: Doc = host()(sentence)
+    start = sentence.index(phrase)
+    assert JateDraw.pieces(doc, start, start + len(phrase), phrase, phrase) == (
+        (phrase, phrase, start, start + len(phrase)),
+    )
+
+
+def test_figure_labels_are_not_split() -> None:
+    sentence = 'The valve has a 2a or 2b arrow in a frame.'
+    phrase = 'a 2a or 2b arrow'
+    doc: Doc = host()(sentence)
+    start = sentence.index(phrase)
+    assert JateDraw.pieces(doc, start, start + len(phrase), phrase.lower(), phrase) == (
+        (phrase.lower(), phrase, start, start + len(phrase)),
+    )

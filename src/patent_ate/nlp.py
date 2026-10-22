@@ -26,7 +26,10 @@ from patent_ate.termhood import (
 )
 
 _SEQUENCE_IDENTIFIER = re.compile(r'[:#]\s*\d|\b(?:no|nr|id|seq)\b\.?\s*\d')
-_ARTICLES = frozenset({'a', 'an'})
+_FRAGMENT_KEY = re.compile(
+    r'^(?:at\s+)?(?:least|most)\b|^\S+ or more\b'
+    r'|^(?:an?\s+)?(?:plurality|number|set|variety|multitude|majority|couple) of\b'
+)
 _QUANTITY_NOUNS = frozenset({
     'plurality',
     'number',
@@ -282,34 +285,16 @@ class JateDraw(BaseModel):
     ) -> tuple[tuple[str, str, int, int], ...]:
         """Return the admitted (key, surface, start, end) pieces of one candidate position.
 
-        A position is dropped when its key is a sequence identifier or its span
-        opens with a numeric quantifier phrase. A coordinated modifier span is
-        replaced by one piece per conjunct; any other position is kept whole.
+        A position is dropped when its key is a sequence identifier or itself opens
+        with a quantifier phrase; a quantifier outside the key leaves the key intact.
+        A coordinated modifier span is replaced by one piece per conjunct; any other
+        position is kept whole.
         """
-        span = host.char_span(start, end, alignment_mode='expand')
-        if _SEQUENCE_IDENTIFIER.search(key) or (span is not None and JateDraw.quantifier_led(span)):
+        if _SEQUENCE_IDENTIFIER.search(key) or _FRAGMENT_KEY.search(key):
             return ()
+        span = host.char_span(start, end, alignment_mode='expand')
         conjuncts = JateDraw.conjunct_pieces(span) if span is not None else ()
         return conjuncts or ((key, surface, start, end),)
-
-    @staticmethod
-    def quantifier_led(span: Span) -> bool:
-        """Return whether a span opens with a quantifier phrase rather than a term.
-
-        Covers an adverbial or prepositional opener with a number ('at least one',
-        'in one'), a number followed by a coordinator ('one or more'), and a
-        quantity noun followed by 'of' after an optional article ('a plurality of',
-        'a number of', 'a set of').
-        """
-        numeric = any(token.like_num or token.pos_ == 'NUM' for token in span) and (
-            span[0].pos_ in {'ADP', 'ADV'}
-            or (span[0].like_num and any(token.pos_ == 'CCONJ' for token in span[1:2]))
-        )
-        head = tuple(dropwhile(lambda token: token.lower_ in _ARTICLES, span))
-        quantity = (
-            len(head) >= 2 and head[0].lemma_.lower() in _QUANTITY_NOUNS and head[1].lower_ == 'of'
-        )
-        return numeric or quantity
 
     @staticmethod
     def coordinated_members(span: Span) -> tuple[Token, ...]:
@@ -346,10 +331,14 @@ class JateDraw(BaseModel):
         modifier tokens, keyed with the head lemma; the character offsets cover
         only those tokens because the head is not contiguous with them. The last
         conjunct yields its modifier tokens and the head, which is the contiguous
-        tail. Spans with numeric tokens, head coordination or fewer than two
-        conjuncts yield nothing, so the caller keeps the span whole.
+        tail. Spans with numeric tokens or digits (figure labels such as '2a'), head
+        coordination or fewer than two conjuncts yield nothing, so the caller keeps
+        the span whole.
         """
-        if any(token.like_num or token.pos_ == 'NUM' for token in span):
+        if any(
+            token.like_num or token.pos_ == 'NUM' or any(char.isdigit() for char in token.text)
+            for token in span
+        ):
             return ()
         members = JateDraw.coordinated_members(span)
         root = span.root
@@ -490,7 +479,9 @@ class JateDraw(BaseModel):
             if (key := normalize_surface(cand.normalized_form)) and not is_stop_surface(key)
             for doc_id, positions in cand.doc_positions.items()
             for start, end, _sent in positions
-            if end > start and (width := token_length(hosts[doc_id], start, end, key)) >= 1
+            if end > start
+            and (width := token_length(hosts[doc_id], start, end, key)) >= 1
+            and (width >= 2 or len(key.split()) >= 2)
         )
         grouped = {
             row: tuple(span for _row, _start, span in group)
