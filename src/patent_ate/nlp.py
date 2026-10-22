@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from functools import cache, reduce
-from itertools import batched, chain, groupby
-from operator import itemgetter
+from itertools import batched, chain, dropwhile, groupby
+from operator import attrgetter, itemgetter
 from typing import Self
 
 import polars as pl
@@ -15,7 +16,7 @@ from jate.features import TermFrequency
 from jate.models import Candidate, Document, Term
 from pydantic import BaseModel, ConfigDict, Field
 from spacy.language import Language
-from spacy.tokens import Doc
+from spacy.tokens import Doc, Span, Token
 
 from patent_ate.spec import AteSpec
 from patent_ate.termhood import (
@@ -23,6 +24,18 @@ from patent_ate.termhood import (
     is_stop_surface,
     normalize_surface,
 )
+
+_SEQUENCE_IDENTIFIER = re.compile(r'[:#]\s*\d|\b(?:no|nr|id|seq)\b\.?\s*\d')
+_ARTICLES = frozenset({'a', 'an'})
+_QUANTITY_NOUNS = frozenset({
+    'plurality',
+    'number',
+    'set',
+    'variety',
+    'multitude',
+    'majority',
+    'couple',
+})
 
 
 @cache
@@ -204,9 +217,9 @@ class JateDraw(BaseModel):
         backend = ReusedDocs({
             document.content: doc for document, doc in zip(documents, parsed, strict=True)
         })
-        return [
-            cand
-            for cand in dict(
+        hosts = {document.doc_id: doc for document, doc in zip(documents, parsed, strict=True)}
+        raw = tuple(
+            dict(
                 chain(
                     (
                         (cand.normalized_form, cand)
@@ -222,9 +235,185 @@ class JateDraw(BaseModel):
                     ),
                 )
             ).values()
+        )
+        return [
+            cand
+            for cand in JateDraw.expanded(raw, hosts)
             if len(cand.normalized_form.split()) >= 2
             and not is_stop_surface(normalize_surface(cand.normalized_form))
         ]
+
+    @staticmethod
+    def expanded(
+        candidates: Sequence[Candidate],
+        hosts: Mapping[str, Doc],
+    ) -> tuple[Candidate, ...]:
+        """Rebuild candidates from admitted pieces of their positions.
+
+        Each position is replaced by the pieces ``pieces`` returns for it, so
+        coordinated modifiers gain one candidate per conjunct and fragments
+        lose their positions.
+        """
+        events = dict.fromkeys(
+            (key, surface, doc_id, piece_start, piece_end, sent)
+            for cand in candidates
+            for doc_id, positions in cand.doc_positions.items()
+            for start, end, sent in positions
+            for key, surface, piece_start, piece_end in JateDraw.pieces(
+                hosts[doc_id], start, end, cand.normalized_form, cand.surface_form
+            )
+        )
+
+        def single(event: tuple[str, str, str, int, int, int]) -> Candidate:
+            key, surface, doc_id, start, end, sent = event
+            cand = Candidate(surface_form=surface, normalized_form=key)
+            cand.add_position(doc_id, start, end, sent)
+            return cand
+
+        return tuple(JateDraw.absorb({}, tuple(single(event) for event in events)).values())
+
+    @staticmethod
+    def pieces(
+        host: Doc,
+        start: int,
+        end: int,
+        key: str,
+        surface: str,
+    ) -> tuple[tuple[str, str, int, int], ...]:
+        """Return the admitted (key, surface, start, end) pieces of one candidate position.
+
+        A position is dropped when its key is a sequence identifier or its span
+        opens with a numeric quantifier phrase. A coordinated modifier span is
+        replaced by one piece per conjunct; any other position is kept whole.
+        """
+        span = host.char_span(start, end, alignment_mode='expand')
+        if _SEQUENCE_IDENTIFIER.search(key) or (span is not None and JateDraw.quantifier_led(span)):
+            return ()
+        conjuncts = JateDraw.conjunct_pieces(span) if span is not None else ()
+        return conjuncts or ((key, surface, start, end),)
+
+    @staticmethod
+    def quantifier_led(span: Span) -> bool:
+        """Return whether a span opens with a quantifier phrase rather than a term.
+
+        Covers an adverbial or prepositional opener with a number ('at least one',
+        'in one'), a number followed by a coordinator ('one or more'), and a
+        quantity noun followed by 'of' after an optional article ('a plurality of',
+        'a number of', 'a set of').
+        """
+        numeric = any(token.like_num or token.pos_ == 'NUM' for token in span) and (
+            span[0].pos_ in {'ADP', 'ADV'}
+            or (span[0].like_num and any(token.pos_ == 'CCONJ' for token in span[1:2]))
+        )
+        head = tuple(dropwhile(lambda token: token.lower_ in _ARTICLES, span))
+        quantity = (
+            len(head) >= 2 and head[0].lemma_.lower() in _QUANTITY_NOUNS and head[1].lower_ == 'of'
+        )
+        return numeric or quantity
+
+    @staticmethod
+    def coordinated_members(span: Span) -> tuple[Token, ...]:
+        """Return the conjuncts of the first modifier coordination in ``span``, in order.
+
+        A modifier is a direct dependent of the span root that heads a coordination
+        inside the span, and the span must contain a coordinator. Coordination at
+        the head itself yields nothing.
+        """
+        root = span.root
+        inside = frozenset(range(span.start, span.end))
+        conjunct_sets = tuple(
+            members
+            for top in root.children
+            if top.i in inside
+            if len(
+                members := tuple(
+                    sorted(
+                        {token for token in (top, *top.conjuncts) if token.i in inside},
+                        key=attrgetter('i'),
+                    )
+                )
+            )
+            >= 2
+        )
+        has_cc = any(token.dep_ == 'cc' for token in span)
+        return conjunct_sets[0] if conjunct_sets and has_cc else ()
+
+    @staticmethod
+    def conjunct_pieces(span: Span) -> tuple[tuple[str, str, int, int], ...]:
+        """Split a coordinated modifier span into one piece per conjunct.
+
+        The shared head is the span root. Each non-last conjunct yields its own
+        modifier tokens, keyed with the head lemma; the character offsets cover
+        only those tokens because the head is not contiguous with them. The last
+        conjunct yields its modifier tokens and the head, which is the contiguous
+        tail. Spans with numeric tokens, head coordination or fewer than two
+        conjuncts yield nothing, so the caller keeps the span whole.
+        """
+        if any(token.like_num or token.pos_ == 'NUM' for token in span):
+            return ()
+        members = JateDraw.coordinated_members(span)
+        root = span.root
+        inside = frozenset(range(span.start, span.end))
+        leading = tuple(
+            (core, core)
+            for member in members[:-1]
+            if (core := JateDraw.modifier_tokens(member, members, inside))
+        )
+        tail = tuple(
+            (core, (*core, root))
+            for member in members[-1:]
+            if (core := JateDraw.modifier_tokens(member, members, inside))
+        )
+        return tuple(
+            JateDraw.conjunct_piece(core, covered, root) for core, covered in (*leading, *tail)
+        )
+
+    @staticmethod
+    def modifier_tokens(
+        member: Token,
+        members: Sequence[Token],
+        inside: frozenset[int],
+    ) -> tuple[Token, ...]:
+        """Return the content tokens of one conjunct, without other conjuncts or coordinators."""
+        below = frozenset(token.i for token in member.subtree)
+        others = frozenset(
+            token.i
+            for other in members
+            if other is not member and other.i in below
+            for token in other.subtree
+        )
+        return JateDraw.trim_edges(
+            tuple(
+                token
+                for token in member.subtree
+                if token.i in inside and token.i not in others and token.dep_ != 'cc'
+            )
+        )
+
+    @staticmethod
+    def trim_edges(tokens: tuple[Token, ...]) -> tuple[Token, ...]:
+        """Drop leading and trailing stopwords and punctuation."""
+
+        def is_edge(token: Token) -> bool:
+            return token.is_stop or token.is_punct
+
+        head = tuple(dropwhile(is_edge, tokens))
+        return tuple(reversed(tuple(dropwhile(is_edge, reversed(head)))))
+
+    @staticmethod
+    def conjunct_piece(
+        core: tuple[Token, ...],
+        covered: tuple[Token, ...],
+        root: Token,
+    ) -> tuple[str, str, int, int]:
+        """Return (key, surface, start, end) for one conjunct over the ``covered`` tokens."""
+        start = covered[0].idx
+        stop = covered[-1].idx + len(covered[-1].text)
+        text = core[0].doc.text
+        key = (
+            f'{text[core[0].idx : core[-1].idx + len(core[-1].text)].lower()} {root.lemma_.lower()}'
+        )
+        return key, text[start:stop], start, stop
 
     @staticmethod
     def score(
@@ -301,7 +490,7 @@ class JateDraw(BaseModel):
             if (key := normalize_surface(cand.normalized_form)) and not is_stop_surface(key)
             for doc_id, positions in cand.doc_positions.items()
             for start, end, _sent in positions
-            if end > start and (width := token_length(hosts[doc_id], start, end, key)) >= 2
+            if end > start and (width := token_length(hosts[doc_id], start, end, key)) >= 1
         )
         grouped = {
             row: tuple(span for _row, _start, span in group)
