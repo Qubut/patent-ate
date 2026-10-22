@@ -137,7 +137,12 @@ phrase per conjunct, and the shared head is kept on each. In "a lithium-ion
 or solid-state battery", the candidates are "lithium-ion battery" and
 "solid-state battery". Coordination inside a fixed term follows the same
 rule: "hook and loop fasteners" yields "hook fastener" and "loop fastener".
-Numeric coordination such as "the first and second jaws" stays one phrase.
+Words between the last conjunct and the head are shared by every piece, so
+"front and rear flange portions" yields "front flange portion" and "rear flange
+portion". Numeric coordination such as "the first and second jaws", a
+coordinator other than "and" or "or", and a conjunct cut out of a hyphenated
+word stay one phrase. Every inflected form seen for a phrase stays a lookup
+form of that phrase.
 
 Fragments are dropped instead of scored. A phrase that opens with a numeric
 quantifier ("at least one notification", "one or more sensors") or with a

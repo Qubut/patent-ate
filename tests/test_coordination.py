@@ -5,6 +5,7 @@ from __future__ import annotations
 from functools import cache
 
 import pytest
+from jate.models import Document
 from spacy.language import Language
 from spacy.tokens import Doc
 
@@ -48,7 +49,8 @@ def test_piece_offsets_index_the_source_text() -> None:
     start = sentence.index(phrase)
     for _key, surface, s, e in JateDraw.pieces(doc, start, start + len(phrase), phrase, phrase):
         assert 0 <= s < e <= len(sentence)
-        assert sentence[s:e] == surface
+        assert surface.startswith(sentence[s:e])
+        assert surface.endswith('battery')
 
 
 def test_three_conjuncts_yield_three_pieces() -> None:
@@ -133,4 +135,66 @@ def test_figure_labels_are_not_split() -> None:
     start = sentence.index(phrase)
     assert JateDraw.pieces(doc, start, start + len(phrase), phrase.lower(), phrase) == (
         (phrase.lower(), phrase, start, start + len(phrase)),
+    )
+
+
+def extracted(*texts: str) -> dict[str, list[str]]:
+    """Return each extracted key with its sorted surface forms."""
+    documents = tuple(Document(doc_id=str(index), content=text) for index, text in enumerate(texts))
+    parsed = tuple(host().pipe(texts))
+    return {
+        cand.normalized_form: sorted(cand.surface_forms)
+        for cand in JateDraw.extract(documents, parsed)
+    }
+
+
+def test_whole_candidates_keep_every_surface_variant() -> None:
+    keys = extracted(
+        'A conventional buck converter is shown.',
+        'Two conventional buck converters are shown.',
+    )
+    assert keys['conventional buck converter'] == [
+        'conventional buck converter',
+        'conventional buck converters',
+    ]
+
+
+def test_stopword_modifiers_still_yield_their_piece() -> None:
+    keys = extracted('The vehicle has front and rear wheels.')
+    assert set(keys) == {'front wheel', 'rear wheel'}
+
+
+def test_every_piece_surface_names_the_head() -> None:
+    keys = extracted('The vehicle has front and rear wheels.')
+    assert keys == {'front wheel': ['front wheels'], 'rear wheel': ['rear wheels']}
+
+
+def test_tokens_between_the_conjuncts_and_the_head_enter_every_key() -> None:
+    keys = extracted('The unit has residential or commercial power supply applications.')
+    assert set(keys) == {
+        'residential power supply application',
+        'commercial power supply application',
+    }
+
+
+@pytest.mark.parametrize(
+    ('sentence', 'phrase'),
+    [
+        (
+            'The pad is a permanent or semi-permanent structure.',
+            'permanent or semi-permanent structure',
+        ),
+        (
+            'It is an eligibility (but not benefits) verification service.',
+            'eligibility (but not benefits) verification service',
+        ),
+    ],
+)
+def test_hyphenated_words_and_parenthetical_contrasts_stay_whole(
+    sentence: str, phrase: str
+) -> None:
+    doc: Doc = host()(sentence)
+    start = sentence.index(phrase)
+    assert JateDraw.pieces(doc, start, start + len(phrase), phrase, phrase) == (
+        (phrase, phrase, start, start + len(phrase)),
     )

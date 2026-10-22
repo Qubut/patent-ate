@@ -5,13 +5,14 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from functools import cache, reduce
-from itertools import batched, chain, dropwhile, groupby
+from itertools import batched, chain, compress, dropwhile, groupby, repeat
 from operator import attrgetter, itemgetter
 from typing import Self
 
 import polars as pl
 import spacy
 from jate import CValue, MemoryCorpusStore, NounPhraseExtractor, PosPatternExtractor
+from jate.extractors.pos_pattern import STOPWORDS
 from jate.features import TermFrequency
 from jate.models import Candidate, Document, Term
 from pydantic import BaseModel, ConfigDict, Field
@@ -30,15 +31,7 @@ _FRAGMENT_KEY = re.compile(
     r'^(?:at\s+)?(?:least|most)\b|^\S+ or more\b'
     r'|^(?:an?\s+)?(?:plurality|number|set|variety|multitude|majority|couple) of\b'
 )
-_QUANTITY_NOUNS = frozenset({
-    'plurality',
-    'number',
-    'set',
-    'variety',
-    'multitude',
-    'majority',
-    'couple',
-})
+_COORDINATORS = frozenset({'and', 'or', 'and/or', '&', '/'})
 
 
 @cache
@@ -255,10 +248,25 @@ class JateDraw(BaseModel):
 
         Each position is replaced by the pieces ``pieces`` returns for it, so
         coordinated modifiers gain one candidate per conjunct and fragments
-        lose their positions.
+        lose their positions. A position kept whole carries every surface form
+        of its candidate; a conjunct piece carries only its own surface.
         """
         events = dict.fromkeys(
-            (key, surface, doc_id, piece_start, piece_end, sent)
+            (
+                key,
+                surface,
+                frozenset({
+                    surface,
+                    *compress(
+                        cand.surface_forms,
+                        repeat((key, piece_start, piece_end) == (cand.normalized_form, start, end)),
+                    ),
+                }),
+                doc_id,
+                piece_start,
+                piece_end,
+                sent,
+            )
             for cand in candidates
             for doc_id, positions in cand.doc_positions.items()
             for start, end, sent in positions
@@ -267,9 +275,10 @@ class JateDraw(BaseModel):
             )
         )
 
-        def single(event: tuple[str, str, str, int, int, int]) -> Candidate:
-            key, surface, doc_id, start, end, sent = event
+        def single(event: tuple[str, str, frozenset[str], str, int, int, int]) -> Candidate:
+            key, surface, surfaces, doc_id, start, end, sent = event
             cand = Candidate(surface_form=surface, normalized_form=key)
+            cand.surface_forms.update(surfaces)
             cand.add_position(doc_id, start, end, sent)
             return cand
 
@@ -327,13 +336,15 @@ class JateDraw(BaseModel):
     def conjunct_pieces(span: Span) -> tuple[tuple[str, str, int, int], ...]:
         """Split a coordinated modifier span into one piece per conjunct.
 
-        The shared head is the span root. Each non-last conjunct yields its own
-        modifier tokens, keyed with the head lemma; the character offsets cover
-        only those tokens because the head is not contiguous with them. The last
-        conjunct yields its modifier tokens and the head, which is the contiguous
-        tail. Spans with numeric tokens or digits (figure labels such as '2a'), head
-        coordination or fewer than two conjuncts yield nothing, so the caller keeps
-        the span whole.
+        The shared head is the span root, and the tokens between the last conjunct
+        and the head are shared by every piece. Each non-last conjunct yields its
+        own modifier tokens, the shared tokens and the head, keyed with the head
+        lemma; its character offsets cover only the conjunct's own tokens because
+        the rest is not contiguous with them. The last conjunct yields the
+        contiguous tail up to the head. The span stays whole when it has numeric
+        tokens or digits (figure labels such as '2a'), a coordinator other than
+        'and' or 'or', a conjunct that trims to nothing or ends inside a hyphenated
+        word, head coordination, or fewer than two conjuncts.
         """
         if any(
             token.like_num or token.pos_ == 'NUM' or any(char.isdigit() for char in token.text)
@@ -343,18 +354,40 @@ class JateDraw(BaseModel):
         members = JateDraw.coordinated_members(span)
         root = span.root
         inside = frozenset(range(span.start, span.end))
-        leading = tuple(
-            (core, core)
-            for member in members[:-1]
-            if (core := JateDraw.modifier_tokens(member, members, inside))
+        cores = tuple(JateDraw.modifier_tokens(member, members, inside) for member in members)
+        grouped = frozenset(
+            token.i for member in members for token in member.subtree if token.i in inside
         )
-        tail = tuple(
-            (core, (*core, root))
-            for member in members[-1:]
-            if (core := JateDraw.modifier_tokens(member, members, inside))
+        shared = JateDraw.trim_edges(
+            tuple(
+                token
+                for token in span
+                if token.i > max(grouped, default=span.end)
+                and token.i < root.i
+                and token.dep_ != 'cc'
+            )
         )
+        doc = span.doc
+        splits_word = any(
+            core[-1].i + 1 < len(doc)
+            and doc[core[-1].i + 1].text == '-'
+            and not core[-1].whitespace_
+            for core in cores
+            if core
+        )
+        coordinators = frozenset(token.lower_ for token in span if token.dep_ == 'cc')
+        admitted = (
+            bool(members)
+            and all(cores)
+            and coordinators <= _COORDINATORS
+            and not splits_word
+            and not any(member.is_punct for member in members)
+        )
+        if not admitted:
+            return ()
         return tuple(
-            JateDraw.conjunct_piece(core, covered, root) for core, covered in (*leading, *tail)
+            JateDraw.conjunct_piece(core, shared, root, tail=index == len(cores) - 1)
+            for index, core in enumerate(cores)
         )
 
     @staticmethod
@@ -381,10 +414,10 @@ class JateDraw(BaseModel):
 
     @staticmethod
     def trim_edges(tokens: tuple[Token, ...]) -> tuple[Token, ...]:
-        """Drop leading and trailing stopwords and punctuation."""
+        """Drop leading and trailing candidate stopwords and punctuation."""
 
         def is_edge(token: Token) -> bool:
-            return token.is_stop or token.is_punct
+            return token.lower_ in STOPWORDS or token.is_punct
 
         head = tuple(dropwhile(is_edge, tokens))
         return tuple(reversed(tuple(dropwhile(is_edge, reversed(head)))))
@@ -392,17 +425,29 @@ class JateDraw(BaseModel):
     @staticmethod
     def conjunct_piece(
         core: tuple[Token, ...],
-        covered: tuple[Token, ...],
+        shared: tuple[Token, ...],
         root: Token,
+        *,
+        tail: bool,
     ) -> tuple[str, str, int, int]:
-        """Return (key, surface, start, end) for one conjunct over the ``covered`` tokens."""
-        start = covered[0].idx
-        stop = covered[-1].idx + len(covered[-1].text)
+        """Return (key, surface, start, end) for one conjunct.
+
+        The key joins the conjunct's own tokens, the shared tokens and the head
+        lemma. The tail conjunct is contiguous with the head, so its surface is
+        the source slice up to the head; any other conjunct spells its surface
+        from its own tokens, the shared tokens and the head.
+        """
         text = core[0].doc.text
-        key = (
-            f'{text[core[0].idx : core[-1].idx + len(core[-1].text)].lower()} {root.lemma_.lower()}'
-        )
-        return key, text[start:stop], start, stop
+
+        def slice_of(tokens: tuple[Token, ...]) -> str:
+            return ' '.join(text[tokens[0].idx : tokens[-1].idx + len(tokens[-1].text)].split())
+
+        words = tuple(slice_of(tokens) for tokens in (core, shared) if tokens)
+        key = ' '.join((*(word.lower() for word in words), root.lemma_.lower()))
+        start = core[0].idx
+        stop = root.idx + len(root.text) if tail else core[-1].idx + len(core[-1].text)
+        surface = text[start:stop] if tail else ' '.join((*words, root.text))
+        return key, surface, start, stop
 
     @staticmethod
     def score(
