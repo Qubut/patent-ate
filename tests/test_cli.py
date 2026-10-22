@@ -8,13 +8,13 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
-from tests.cli_text import compact_help, help_text
 
 from patent_ate import __main__ as ate_main
 from patent_ate.extract import write_termhood
 from patent_ate.run import AteRunRequest, run_corpus_ate
 from patent_ate.spec import AteSpec
 from patent_ate.termhood import TERMHOOD_META_NAME, TermhoodStore, TermhoodTable
+from tests.cli_text import compact_help, help_text
 
 _FIXTURES = Path(__file__).resolve().parent / 'fixtures' / 'hupd'
 _SMOKE_YAML = Path(__file__).resolve().parent / 'fixtures' / 'ate.smoke.yaml'
