@@ -25,6 +25,23 @@ jobs:
         env:
           OUTPUT: CHANGELOG.md
 
+      - name: Release notes
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: RELEASE_NOTES.md
+
+      - name: Commit changelog
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add CHANGELOG.md
+          git diff --cached --quiet && exit 0
+          git commit -m "docs(changelog): update for ${{ github.ref_name }}"
+          git push origin HEAD:main
+
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: '3.12'
@@ -35,5 +52,5 @@ jobs:
       - name: GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          body_path: CHANGELOG.md
+          body_path: RELEASE_NOTES.md
           files: dist/*
