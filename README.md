@@ -130,6 +130,26 @@ index = TermhoodIndex.from_store(store)
 index.score('lithium-ion battery')
 ```
 
+## Which phrases are admitted
+
+A noun phrase that joins two modifiers with a coordinator is split into one
+phrase per conjunct, and the shared head is kept on each. In "a lithium-ion
+or solid-state battery", the candidates are "lithium-ion battery" and
+"solid-state battery". Coordination inside a fixed term follows the same
+rule: "hook and loop fasteners" yields "hook fastener" and "loop fastener".
+Numeric coordination such as "the first and second jaws" stays one phrase.
+
+Fragments are dropped instead of scored. A phrase that opens with a numeric
+quantifier ("at least one notification", "one or more sensors") or with a
+quantity noun followed by "of" ("a plurality of sensors", "a number of
+sensors", "a set of sensors") is rejected, as is a phrase keyed by a
+sequence identifier such as "seq id no:405".
+
+The termhood table changes with this release. Tables built by earlier
+versions still hold the fragments and the unsplit modifiers, so rebuild
+them with `patent-ate corpus` or `patent-ate extract` and `score` before
+comparing scores or loading the published dataset.
+
 ## Evidence from the Harvard USPTO Patent Dataset
 
 Suzgun, Melas-Kyriazi, Sarkar, Kominers, and Shieber (2022) released the
